@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+    <title>ウゴキCheck! スポラボ - 体育の動画解析ツール</title>
+
+    <!-- PWA: どの端末・OSでも「アプリ」としてホーム画面に追加できるようにする設定 -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#2563eb">
+    <link rel="icon" href="icons/icon-192.png">
+    <!-- iOS (iPhone/iPad) 用 -->
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="ウゴキCheck!">
+    <!-- Android/Windows 用 -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="msapplication-TileColor" content="#2563eb">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans JP', 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            background-color: #f3f4f6;
+            /* iOS/Android端末のアドレスバー分のズレを防ぐ（対応ブラウザではdvhを優先） */
+            height: 100vh;
+            height: 100dvh;
+        }
+        .video-container {
+            position: relative;
+            background-color: #000;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+        }
+        .drawing-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+            touch-action: none;
+        }
+        .btn-tool {
+            transition: all 0.2s;
+        }
+        .btn-tool.active {
+            background-color: #2563eb;
+            color: white;
+            border-color: #2563eb;
+            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
+        }
+        .color-swatch {
+            width: 2rem;
+            height: 2rem;
+            border-radius: 9999px;
+            cursor: pointer;
+            transition: transform 0.15s;
+            border: 2px solid white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        .color-swatch:hover, .color-swatch.active {
+            transform: scale(1.2);
+        }
+        .control-button {
+            background-color: #ffffff;
+            color: #374151;
+            border: 1px solid #d1d5db;
+            border-radius: 0.5rem;
+            padding: 0.5rem 0.75rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.375rem;
+            transition: all 0.15s;
+        }
+        .control-button:hover:not(:disabled) {
+            background-color: #f3f4f6;
+            border-color: #9ca3af;
+        }
+        .control-button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .play-main-btn {
+            background-color: #2563eb;
+            color: white;
+            border: none;
+        }
+        .play-main-btn:hover:not(:disabled) {
+            background-color: #1d4ed8;
+        }
+    </style>
+</head>
+<body class="text-gray-800 bg-gray-100 h-screen flex flex-col overflow-hidden select-none">
+
+    <!-- ヘッダー (コンパクト化) -->
+    <header class="bg-blue-600 text-white shadow-sm shrink-0">
+        <div class="px-4 py-2 flex justify-between items-center gap-2">
+            <div class="flex items-center gap-2">
+                <h1 class="text-lg sm:text-xl font-bold flex items-center gap-2 whitespace-nowrap">
+                    <i class="fas fa-bolt text-yellow-300"></i> ウゴキCheck! スポラボ
+                </h1>
+                <span class="text-xs text-blue-100 hidden md:inline">| 動画をくらべて動きをマスター！</span>
+            </div>
+            
+            <!-- モード切り替えタブ -->
+            <div class="bg-blue-700/60 p-0.5 rounded-lg flex items-center gap-1 border border-blue-400/30 text-xs">
+                <button id="mode-single-btn" class="px-3 py-1 rounded-md font-bold bg-white text-blue-700 shadow transition">
+                    <i class="fas fa-desktop mr-1"></i> 1画面
+                </button>
+                <button id="mode-compare-btn" class="px-3 py-1 rounded-md font-bold text-white hover:bg-blue-600/50 transition">
+                    <i class="fas fa-columns mr-1"></i> 2画面比較
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 flex flex-col min-h-0 p-2 sm:p-3 gap-2 max-w-[1920px] w-full mx-auto">
+        
+        <!-- 共通ツールバー (高さを極力抑えたスリムデザイン) -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 px-3 py-1.5 shrink-0 flex flex-wrap items-center justify-between gap-2 text-xs">
+            
+            <!-- 1. 描画ツール選択 -->
+            <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="font-bold text-gray-500 mr-1 hidden sm:inline">ツール:</span>
+                <button data-tool="pen" class="btn-tool active control-button py-1 px-2.5 text-xs">
+                    <i class="fas fa-pen"></i> <span class="hidden md:inline">ペン</span>
+                </button>
+                <button data-tool="line" class="btn-tool control-button py-1 px-2.5 text-xs">
+                    <i class="fas fa-minus"></i> <span class="hidden md:inline">直線</span>
+                </button>
+                <button data-tool="rect" class="btn-tool control-button py-1 px-2.5 text-xs">
+                    <i class="far fa-square"></i> <span class="hidden md:inline">四角</span>
+                </button>
+                <button data-tool="circle" class="btn-tool control-button py-1 px-2.5 text-xs">
+                    <i class="far fa-circle"></i> <span class="hidden md:inline">円</span>
+                </button>
+                <button data-tool="angle" class="btn-tool control-button py-1 px-2.5 text-xs bg-amber-50 text-amber-700 border-amber-300">
+                    <i class="fas fa-drafting-compass"></i> 角度(3点)
+                </button>
+            </div>
+
+            <!-- 2. 色＆太さ＆アクション設定 -->
+            <div class="flex items-center gap-3 flex-wrap">
+                <div class="flex items-center gap-1.5">
+                    <span class="font-bold text-gray-500 hidden sm:inline">色:</span>
+                    <div class="flex items-center gap-1" id="color-palette">
+                        <button class="color-swatch active !w-5 !h-5" style="background-color: #ef4444;" data-color="#ef4444"></button>
+                        <button class="color-swatch !w-5 !h-5" style="background-color: #3b82f6;" data-color="#3b82f6"></button>
+                        <button class="color-swatch !w-5 !h-5" style="background-color: #22c55e;" data-color="#22c55e"></button>
+                        <button class="color-swatch !w-5 !h-5" style="background-color: #eab308;" data-color="#eab308"></button>
+                        <button class="color-swatch !w-5 !h-5" style="background-color: #ffffff;" data-color="#ffffff"></button>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-1.5">
+                    <span class="font-bold text-gray-500 hidden sm:inline">太さ:</span>
+                    <input type="range" id="line-width" min="2" max="16" value="5" class="w-16 accent-blue-600 h-1 bg-gray-200 rounded">
+                </div>
+
+                <div class="h-4 w-px bg-gray-200"></div>
+
+                <!-- 操作取り消し / クリア -->
+                <div class="flex items-center gap-1.5">
+                    <button id="undo-btn" class="control-button py-1 px-2 text-xs text-gray-600" title="1つもどす">
+                        <i class="fas fa-undo"></i> <span class="hidden lg:inline">戻す</span>
+                    </button>
+                    <button id="clear-all-btn" class="control-button py-1 px-2 text-xs text-red-600 border-red-200 hover:bg-red-50" title="全消去">
+                        <i class="fas fa-trash-alt"></i> <span class="hidden lg:inline">消去</span>
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 角度測定の説明ガイダンス（オーバーレイ風にコンパクト化） -->
+        <div id="angle-help" class="hidden px-3 py-1 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-center gap-2 shrink-0">
+            <i class="fas fa-info-circle text-amber-600 text-xs"></i>
+            <span><strong>角度測定:</strong> 動画上で「頂点(関節) → 端点1 → 端点2」の順に3回タップしてください。</span>
+        </div>
+
+        <!-- 動画プレイヤーエリア (フレックスサイズで画面内に収める) -->
+        <div id="video-grid" class="flex-1 min-h-0 grid grid-cols-1 gap-2">
+            
+            <!-- 動画スロット 1 -->
+            <div id="slot-1" class="bg-white rounded-xl shadow-sm border border-gray-200 p-2 flex flex-col min-h-0">
+                <div class="flex items-center justify-between mb-1.5 flex-wrap gap-1 shrink-0">
+                    <div class="flex items-center gap-2">
+                        <span id="slot-1-tag" class="bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded text-xs">動画</span>
+                        <label class="cursor-pointer bg-blue-50 text-blue-600 hover:bg-blue-100 px-2.5 py-0.5 rounded text-xs font-bold transition flex items-center gap-1">
+                            <i class="fas fa-folder-open"></i> ファイル選択
+                            <input type="file" class="video-file-input hidden" data-slot="1" accept="video/*">
+                        </label>
+                        <span id="filename-1" class="text-xs text-gray-500 truncate max-w-[120px] sm:max-w-xs">動画を選択</span>
+                    </div>
+
+                    <button class="save-img-btn control-button py-0.5 px-2 text-xs text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100" data-slot="1" disabled>
+                        <i class="fas fa-camera"></i> 画像保存
+                    </button>
+                </div>
+
+                <!-- 動画＆キャンバス (flex-1 で余白に合わせて自動拡縮) -->
+                <div class="video-container flex-1 min-h-0 w-full flex items-center justify-center">
+                    <video id="video-1" class="w-full h-full object-contain" playsinline></video>
+                    <canvas id="canvas-1" class="drawing-canvas"></canvas>
+                    <div id="placeholder-1" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 bg-gray-900/90 pointer-events-none p-4 text-center">
+                        <i class="fas fa-video text-3xl mb-1 text-gray-600"></i>
+                        <p class="text-xs">「ファイル選択」から動画をえらんでね</p>
+                    </div>
+                </div>
+
+                <!-- スロット1のプログレスバー -->
+                <div class="mt-1.5 flex items-center gap-2 shrink-0">
+                    <span id="time-1" class="text-xs font-mono text-gray-500 w-10 text-right">00:00</span>
+                    <input type="range" id="progress-1" value="0" min="0" max="100" step="0.1" class="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer" disabled>
+                </div>
+            </div>
+
+            <!-- 動画スロット 2 (比較モード用) -->
+            <div id="slot-2" class="bg-white rounded-xl shadow-sm border border-gray-200 p-2 flex-col min-h-0 hidden">
+                <div class="flex items-center justify-between mb-1.5 flex-wrap gap-1 shrink-0">
+                    <div class="flex items-center gap-2">
+                        <span class="bg-purple-100 text-purple-800 font-bold px-2 py-0.5 rounded text-xs">動画 2</span>
+                        <label class="cursor-pointer bg-purple-50 text-purple-600 hover:bg-purple-100 px-2.5 py-0.5 rounded text-xs font-bold transition flex items-center gap-1">
+                            <i class="fas fa-folder-open"></i> ファイル選択
+                            <input type="file" class="video-file-input hidden" data-slot="2" accept="video/*">
+                        </label>
+                        <span id="filename-2" class="text-xs text-gray-500 truncate max-w-[120px] sm:max-w-xs">動画を選択</span>
+                    </div>
+
+                    <button class="save-img-btn control-button py-0.5 px-2 text-xs text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100" data-slot="2" disabled>
+                        <i class="fas fa-camera"></i> 画像保存
+                    </button>
+                </div>
+
+                <!-- 動画＆キャンバス -->
+                <div class="video-container flex-1 min-h-0 w-full flex items-center justify-center">
+                    <video id="video-2" class="w-full h-full object-contain" playsinline></video>
+                    <canvas id="canvas-2" class="drawing-canvas"></canvas>
+                    <div id="placeholder-2" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 bg-gray-900/90 pointer-events-none p-4 text-center">
+                        <i class="fas fa-video text-3xl mb-1 text-gray-600"></i>
+                        <p class="text-xs">比較したい2つ目の動画をえらんでね</p>
+                    </div>
+                </div>
+
+                <!-- スロット2のプログレスバー -->
+                <div class="mt-1.5 flex items-center gap-2 shrink-0">
+                    <span id="time-2" class="text-xs font-mono text-gray-500 w-10 text-right">00:00</span>
+                    <input type="range" id="progress-2" value="0" min="0" max="100" step="0.1" class="w-full accent-purple-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer" disabled>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 統合再生コントロールバー (1行コンパクトデザイン) -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 px-3 py-2 shrink-0">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                
+                <!-- 1. 再生速度 (2倍速を追加) -->
+                <div class="flex items-center gap-1">
+                    <i class="fas fa-tachometer-alt text-gray-400 text-xs"></i>
+                    <span class="text-xs font-bold text-gray-600 hidden sm:inline">速度:</span>
+                    <select id="speed-select" class="bg-gray-50 border border-gray-300 text-gray-800 text-xs rounded-lg px-2 py-1 font-bold focus:ring-blue-500">
+                        <option value="0.25">0.25x</option>
+                        <option value="0.5" selected>0.50x</option>
+                        <option value="0.75">0.75x</option>
+                        <option value="1.0">1.00x</option>
+                        <option value="1.5">1.50x</option>
+                        <option value="2.0">2.00x</option>
+                    </select>
+                </div>
+
+                <!-- 2. 再生・コマ送りメインボタン群 -->
+                <div class="flex items-center gap-1.5 mx-auto sm:mx-0">
+                    <button id="btn-prev-frame" class="control-button text-xs py-1 px-2.5" disabled title="コマ戻し (1/30秒)">
+                        <i class="fas fa-step-backward mr-1"></i>コマ戻し
+                    </button>
+
+                    <button id="btn-play-pause" class="control-button play-main-btn text-xs px-5 py-1.5 rounded-lg font-bold shadow-sm" disabled>
+                        <i class="fas fa-play" id="play-icon"></i> <span id="play-text" class="ml-1">再生</span>
+                    </button>
+
+                    <button id="btn-next-frame" class="control-button text-xs py-1 px-2.5" disabled title="コマ送り (1/30秒)">
+                        コマ送り<i class="fas fa-step-forward ml-1"></i>
+                    </button>
+                </div>
+
+                <!-- 3. 同期コントロール（2画面時のみ有効） -->
+                <div id="sync-controls" class="flex items-center gap-1 opacity-50">
+                    <button id="btn-sync-reset" class="control-button text-xs py-1 px-2 text-purple-700 bg-purple-50 border-purple-200" disabled>
+                        <i class="fas fa-sync-alt"></i> <span class="hidden sm:inline">頭出し同期</span>
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+
+    // --- アプリ状態管理 ---
+    const state = {
+        mode: 'single', // 'single' | 'compare'
+        activeTool: 'pen', // 'pen' | 'line' | 'rect' | 'circle' | 'angle'
+        currentColor: '#ef4444',
+        lineWidth: 5,
+        
+        // 動画スロットデータ
+        slots: {
+            1: {
+                video: document.getElementById('video-1'),
+                canvas: document.getElementById('canvas-1'),
+                ctx: document.getElementById('canvas-1').getContext('2d'),
+                placeholder: document.getElementById('placeholder-1'),
+                progress: document.getElementById('progress-1'),
+                timeDisplay: document.getElementById('time-1'),
+                fileName: document.getElementById('filename-1'),
+                saveBtn: document.querySelectorAll('.save-img-btn[data-slot="1"]')[0],
+                shapes: [], // 描画オブジェクト配列
+                anglePoints: [], // 角度指定時のクリック一時保存 [p1, p2, p3]
+                loaded: false
+            },
+            2: {
+                video: document.getElementById('video-2'),
+                canvas: document.getElementById('canvas-2'),
+                ctx: document.getElementById('canvas-2').getContext('2d'),
+                placeholder: document.getElementById('placeholder-2'),
+                progress: document.getElementById('progress-2'),
+                timeDisplay: document.getElementById('time-2'),
+                fileName: document.getElementById('filename-2'),
+                saveBtn: document.querySelectorAll('.save-img-btn[data-slot="2"]')[0],
+                shapes: [],
+                anglePoints: [],
+                loaded: false
+            }
+        }
+    };
+
+    // --- DOM要素取得 ---
+    const modeSingleBtn = document.getElementById('mode-single-btn');
+    const modeCompareBtn = document.getElementById('mode-compare-btn');
+    const videoGrid = document.getElementById('video-grid');
+    const slot2Element = document.getElementById('slot-2');
+    const slot1Tag = document.getElementById('slot-1-tag');
+
+    const btnPlayPause = document.getElementById('btn-play-pause');
+    const playIcon = document.getElementById('play-icon');
+    const playText = document.getElementById('play-text');
+    const btnPrevFrame = document.getElementById('btn-prev-frame');
+    const btnNextFrame = document.getElementById('btn-next-frame');
+    const speedSelect = document.getElementById('speed-select');
+    const btnSyncReset = document.getElementById('btn-sync-reset');
+    const syncControls = document.getElementById('sync-controls');
+
+    const toolBtns = document.querySelectorAll('.btn-tool');
+    const colorPalette = document.getElementById('color-palette');
+    const lineWidthInput = document.getElementById('line-width');
+    const undoBtn = document.getElementById('undo-btn');
+    const clearAllBtn = document.getElementById('clear-all-btn');
+    const angleHelp = document.getElementById('angle-help');
+
+    // ==========================================
+    // 1. モード切り替え (1画面 / 2画面)
+    // ==========================================
+    modeSingleBtn.addEventListener('click', () => setMode('single'));
+    modeCompareBtn.addEventListener('click', () => setMode('compare'));
+
+    function setMode(newMode) {
+        state.mode = newMode;
+        if (newMode === 'single') {
+            modeSingleBtn.className = "px-3 py-1 rounded-md font-bold bg-white text-blue-700 shadow transition";
+            modeCompareBtn.className = "px-3 py-1 rounded-md font-bold text-white hover:bg-blue-600/50 transition";
+            
+            videoGrid.className = "flex-1 min-h-0 grid grid-cols-1 gap-2";
+            slot2Element.classList.add('hidden');
+            slot2Element.classList.remove('flex');
+            slot1Tag.textContent = "動画";
+            syncControls.classList.add('opacity-50');
+            btnSyncReset.disabled = true;
+        } else {
+            modeSingleBtn.className = "px-3 py-1 rounded-md font-bold text-white hover:bg-blue-600/50 transition";
+            modeCompareBtn.className = "px-3 py-1 rounded-md font-bold bg-white text-blue-700 shadow transition";
+            
+            videoGrid.className = "flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-2";
+            slot2Element.classList.remove('hidden');
+            slot2Element.classList.add('flex');
+            slot1Tag.textContent = "動画 1";
+            syncControls.classList.remove('opacity-50');
+            btnSyncReset.disabled = false;
+            
+            // Canvasのサイズ合わせ
+            setTimeout(() => resizeCanvas(2), 50);
+        }
+        setTimeout(() => resizeCanvas(1), 50);
+        updateMasterControls();
+    }
+
+    // ==========================================
+    // 2. 動画読み込み＆再生制御
+    // ==========================================
+    document.querySelectorAll('.video-file-input').forEach(input => {
+        input.addEventListener('change', (e) => {
+            const slotId = e.target.getAttribute('data-slot');
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const slot = state.slots[slotId];
+            const fileURL = URL.createObjectURL(file);
+            
+            slot.video.src = fileURL;
+            slot.fileName.textContent = file.name;
+            slot.placeholder.classList.add('hidden');
+            slot.loaded = true;
+            slot.saveBtn.disabled = false;
+            slot.progress.disabled = false;
+
+            slot.video.onloadedmetadata = () => {
+                resizeCanvas(slotId);
+                slot.video.playbackRate = parseFloat(speedSelect.value);
+                updateMasterControls();
+            };
+        });
+    });
+
+    // リサイズ処理
+    window.addEventListener('resize', () => {
+        resizeCanvas(1);
+        if (state.mode === 'compare') resizeCanvas(2);
+    });
+
+    function resizeCanvas(slotId) {
+        const slot = state.slots[slotId];
+        if (!slot.video) return;
+        const rect = slot.video.getBoundingClientRect();
+        slot.canvas.width = rect.width;
+        slot.canvas.height = rect.height;
+        redrawCanvas(slotId);
+    }
+
+    // 主コントロールボタンの活性状態更新
+    function updateMasterControls() {
+        const hasVideo = state.slots[1].loaded || (state.mode === 'compare' && state.slots[2].loaded);
+        btnPlayPause.disabled = !hasVideo;
+        btnPrevFrame.disabled = !hasVideo;
+        btnNextFrame.disabled = !hasVideo;
+    }
+
+    // 一括再生/一時停止
+    btnPlayPause.addEventListener('click', () => {
+        const slotsToControl = getActiveSlots();
+        const isAnyPlaying = slotsToControl.some(s => !s.video.paused && !s.video.ended);
+
+        if (isAnyPlaying) {
+            slotsToControl.forEach(s => s.loaded && s.video.pause());
+            setPlayIcon(false);
+        } else {
+            slotsToControl.forEach(s => s.loaded && s.video.play());
+            setPlayIcon(true);
+        }
+    });
+
+    function setPlayIcon(isPlaying) {
+        if (isPlaying) {
+            playIcon.className = 'fas fa-pause';
+            playText.textContent = '一時停止';
+        } else {
+            playIcon.className = 'fas fa-play';
+            playText.textContent = '再生';
+        }
+    }
+
+    // コマ送り / コマ戻し
+    btnPrevFrame.addEventListener('click', () => stepFrame(-1 / 30));
+    btnNextFrame.addEventListener('click', () => stepFrame(1 / 30));
+
+    function stepFrame(seconds) {
+        getActiveSlots().forEach(s => {
+            if (s.loaded) {
+                s.video.pause();
+                s.video.currentTime = Math.max(0, Math.min(s.video.duration || 0, s.video.currentTime + seconds));
+            }
+        });
+        setPlayIcon(false);
+    }
+
+    // 再生速度変更
+    speedSelect.addEventListener('change', () => {
+        const speed = parseFloat(speedSelect.value);
+        getActiveSlots().forEach(s => {
+            if (s.loaded) s.video.playbackRate = speed;
+        });
+    });
+
+    // 2画面の同期リセット
+    btnSyncReset.addEventListener('click', () => {
+        if (state.slots[1].loaded) state.slots[1].video.currentTime = 0;
+        if (state.slots[2].loaded) state.slots[2].video.currentTime = 0;
+    });
+
+    // 各スロットの時間・プログレス更新
+    [1, 2].forEach(slotId => {
+        const s = state.slots[slotId];
+        s.video.addEventListener('timeupdate', () => {
+            if (!s.video.duration) return;
+            const pct = (s.video.currentTime / s.video.duration) * 100;
+            s.progress.value = pct;
+            s.timeDisplay.textContent = formatTime(s.video.currentTime);
+        });
+
+        s.progress.addEventListener('input', () => {
+            if (!s.video.duration) return;
+            s.video.pause();
+            setPlayIcon(false);
+            s.video.currentTime = (s.progress.value / 100) * s.video.duration;
+        });
+    });
+
+    function getActiveSlots() {
+        return state.mode === 'single' ? [state.slots[1]] : [state.slots[1], state.slots[2]];
+    }
+
+    function formatTime(sec) {
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+
+    // ==========================================
+    // 3. 描画ツール & 設定管理
+    // ==========================================
+    toolBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            toolBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            state.activeTool = btn.getAttribute('data-tool');
+            
+            // 角度測定のアシストヘルプ表示
+            if (state.activeTool === 'angle') {
+                angleHelp.classList.remove('hidden');
+            } else {
+                angleHelp.classList.add('hidden');
+            }
+            // 一時角度ポイントのクリア
+            state.slots[1].anglePoints = [];
+            state.slots[2].anglePoints = [];
+        });
+    });
+
+    // パレットカラー選択
+    colorPalette.addEventListener('click', (e) => {
+        const swatch = e.target.closest('.color-swatch');
+        if (!swatch) return;
+        document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
+        swatch.classList.add('active');
+        state.currentColor = swatch.getAttribute('data-color');
+    });
+
+    // 太さ調整
+    lineWidthInput.addEventListener('input', () => {
+        state.lineWidth = parseInt(lineWidthInput.value);
+    });
+
+    // アンドゥ
+    undoBtn.addEventListener('click', () => {
+        getActiveSlots().forEach(s => {
+            s.shapes.pop();
+            redrawCanvas(s === state.slots[1] ? 1 : 2);
+        });
+    });
+
+    // クリア
+    clearAllBtn.addEventListener('click', () => {
+        getActiveSlots().forEach(s => {
+            s.shapes = [];
+            s.anglePoints = [];
+            redrawCanvas(s === state.slots[1] ? 1 : 2);
+        });
+    });
+
+    // ==========================================
+    // 4. キャンバス描画エンジン
+    // ==========================================
+    let isDrawing = false;
+    let currentSlotId = null;
+    let startX = 0, startY = 0;
+    let previewShape = null;
+
+    [1, 2].forEach(slotId => {
+        const slot = state.slots[slotId];
+        const canvas = slot.canvas;
+
+        function getPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+            const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+            return {
+                x: clientX - rect.left,
+                y: clientY - rect.top
+            };
+        }
+
+        function handleStart(e) {
+            if (!slot.loaded) return;
+            const pos = getPos(e);
+            currentSlotId = slotId;
+
+            // --- 角度測定ツール（3点クリック）---
+            if (state.activeTool === 'angle') {
+                slot.anglePoints.push(pos);
+                if (slot.anglePoints.length === 3) {
+                    // 3点揃ったら角度図形を登録
+                    slot.shapes.push({
+                        type: 'angle',
+                        p1: slot.anglePoints[0], // 頂点
+                        p2: slot.anglePoints[1],
+                        p3: slot.anglePoints[2],
+                        color: state.currentColor,
+                        width: state.lineWidth
+                    });
+                    slot.anglePoints = []; // リセット
+                }
+                redrawCanvas(slotId);
+                return;
+            }
+
+            // --- 通常図形ツール ---
+            isDrawing = true;
+            startX = pos.x;
+            startY = pos.y;
+
+            if (state.activeTool === 'pen') {
+                previewShape = {
+                    type: 'pen',
+                    points: [{ x: startX, y: startY }],
+                    color: state.currentColor,
+                    width: state.lineWidth
+                };
+            }
+        }
+
+        function handleMove(e) {
+            if (!isDrawing && slot.anglePoints.length === 0) return;
+            const pos = getPos(e);
+
+            if (isDrawing && currentSlotId === slotId) {
+                if (state.activeTool === 'pen') {
+                    previewShape.points.push(pos);
+                } else if (state.activeTool === 'line') {
+                    previewShape = { type: 'line', x1: startX, y1: startY, x2: pos.x, y2: pos.y, color: state.currentColor, width: state.lineWidth };
+                } else if (state.activeTool === 'rect') {
+                    previewShape = { type: 'rect', x1: startX, y1: startY, x2: pos.x, y2: pos.y, color: state.currentColor, width: state.lineWidth };
+                } else if (state.activeTool === 'circle') {
+                    const r = Math.hypot(pos.x - startX, pos.y - startY);
+                    previewShape = { type: 'circle', cx: startX, cy: startY, r: r, color: state.currentColor, width: state.lineWidth };
+                }
+                redrawCanvas(slotId, previewShape);
+            }
+        }
+
+        function handleEnd() {
+            if (isDrawing && currentSlotId === slotId) {
+                if (previewShape) {
+                    slot.shapes.push(previewShape);
+                    previewShape = null;
+                }
+                isDrawing = false;
+                redrawCanvas(slotId);
+            }
+        }
+
+        // マウス＆タッチイベント割り当て
+        canvas.addEventListener('mousedown', handleStart);
+        canvas.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleEnd);
+
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleStart(e); });
+        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); handleMove(e); });
+        canvas.addEventListener('touchend', handleEnd);
+    });
+
+    // キャンバス再描画処理
+    function redrawCanvas(slotId, tempShape = null) {
+        const slot = state.slots[slotId];
+        const ctx = slot.ctx;
+        ctx.clearRect(0, 0, slot.canvas.width, slot.canvas.height);
+
+        // 既存図形を描画
+        slot.shapes.forEach(shape => drawShape(ctx, shape));
+
+        // ドラッグ中プレビュー描画
+        if (tempShape) {
+            drawShape(ctx, tempShape);
+        }
+
+        // 角度測定の進行中ポイント描画
+        if (slot.anglePoints.length > 0) {
+            ctx.fillStyle = state.currentColor;
+            slot.anglePoints.forEach((pt, idx) => {
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.font = '12px sans-serif';
+                ctx.fillText(idx === 0 ? '頂点' : `点${idx}`, pt.x + 8, pt.y - 8);
+            });
+            // 頂点から点1への補助線
+            if (slot.anglePoints.length === 2) {
+                ctx.strokeStyle = state.currentColor;
+                ctx.lineWidth = 2;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(slot.anglePoints[0].x, slot.anglePoints[0].y);
+                ctx.lineTo(slot.anglePoints[1].x, slot.anglePoints[1].y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
+    }
+
+    // 単一図形の描画ロジック
+    function drawShape(ctx, shape) {
+        ctx.strokeStyle = shape.color;
+        ctx.fillStyle = shape.color;
+        ctx.lineWidth = shape.width;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        if (shape.type === 'pen') {
+            if (shape.points.length < 2) return;
+            ctx.beginPath();
+            ctx.moveTo(shape.points[0].x, shape.points[0].y);
+            for (let i = 1; i < shape.points.length; i++) {
+                ctx.lineTo(shape.points[i].x, shape.points[i].y);
+            }
+            ctx.stroke();
+        } 
+        else if (shape.type === 'line') {
+            ctx.beginPath();
+            ctx.moveTo(shape.x1, shape.y1);
+            ctx.lineTo(shape.x2, shape.y2);
+            ctx.stroke();
+        } 
+        else if (shape.type === 'rect') {
+            ctx.beginPath();
+            ctx.strokeRect(shape.x1, shape.y1, shape.x2 - shape.x1, shape.y2 - shape.y1);
+        } 
+        else if (shape.type === 'circle') {
+            ctx.beginPath();
+            ctx.arc(shape.cx, shape.cy, shape.r, 0, Math.PI * 2);
+            ctx.stroke();
+        } 
+        else if (shape.type === 'angle') {
+            // --- 角度計算＆表示 ---
+            const { p1, p2, p3 } = shape; // p1: 頂点, p2, p3: 端点
+            
+            // 2つのベクトル
+            const v1 = { x: p2.x - p1.x, y: p2.y - p1.y };
+            const v2 = { x: p3.x - p1.x, y: p3.y - p1.y };
+
+            // 角度(ラジアン)計算
+            const angleRad = Math.acos(
+                (v1.x * v2.x + v1.y * v2.y) / 
+                (Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y))
+            );
+            const angleDeg = ((angleRad * 180) / Math.PI).toFixed(1);
+
+            // 2つのアームを描画
+            ctx.beginPath();
+            ctx.moveTo(p2.x, p2.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.lineTo(p3.x, p3.y);
+            ctx.stroke();
+
+            // 頂点の円弧描画
+            const startAngle = Math.atan2(v1.y, v1.x);
+            const endAngle = Math.atan2(v2.y, v2.x);
+            ctx.beginPath();
+            ctx.arc(p1.x, p1.y, 30, startAngle, endAngle, false);
+            ctx.stroke();
+
+            // 頂点マーカー
+            ctx.beginPath();
+            ctx.arc(p1.x, p1.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 角度テキスト表示
+            ctx.font = 'bold 18px sans-serif';
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 4;
+            const text = `${angleDeg}°`;
+            const textX = p1.x + 15;
+            const textY = p1.y - 15;
+            ctx.strokeText(text, textX, textY);
+            ctx.fillText(text, textX, textY);
+        }
+    }
+
+    // ==========================================
+    // 5. 描画付き画像保存 (キャプチャ合成機能)
+    // ==========================================
+    document.querySelectorAll('.save-img-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const slotId = e.currentTarget.getAttribute('data-slot');
+            const slot = state.slots[slotId];
+            if (!slot.loaded) return;
+
+            // 離散キャンバスを作成して動画フレームと描画を合成
+            const exportCanvas = document.createElement('canvas');
+            const exportCtx = exportCanvas.getContext('2d');
+            
+            exportCanvas.width = slot.video.videoWidth || slot.canvas.width;
+            exportCanvas.height = slot.video.videoHeight || slot.canvas.height;
+
+            // 1. 動画フレームを描画
+            exportCtx.drawImage(slot.video, 0, 0, exportCanvas.width, exportCanvas.height);
+
+            // 2. 描画キャンバスのスケール調整をして合成
+            const scaleX = exportCanvas.width / slot.canvas.width;
+            const scaleY = exportCanvas.height / slot.canvas.height;
+            exportCtx.scale(scaleX, scaleY);
+
+            // 3. 描画オブジェクトを合成描画
+            slot.shapes.forEach(shape => drawShape(exportCtx, shape));
+
+            // 4. ダウンロード
+            const imageURI = exportCanvas.toDataURL('image/png');
+            const a = document.createElement('a');
+            a.href = imageURI;
+            a.download = `スポラボ_スロット${slotId}_${new Date().toISOString().slice(0,10)}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        });
+    });
+
+});
+
+// ==========================================
+// 6. PWA登録（どの端末・OSでも「アプリ」として動かすための設定）
+// ==========================================
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('service-worker.js').catch((err) => {
+            console.warn('Service Worker の登録に失敗しました:', err);
+        });
+    });
+}
+</script>
+</body>
+</html>
