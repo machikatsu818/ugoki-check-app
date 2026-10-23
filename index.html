@@ -96,6 +96,13 @@
         .play-main-btn:hover:not(:disabled) {
             background-color: #1d4ed8;
         }
+        .app-status {
+            min-height: 1.25rem;
+            font-size: 0.75rem;
+            color: #374151;
+        }
+        .app-status[data-kind="error"] { color: #b91c1c; }
+        .app-status[data-kind="success"] { color: #047857; }
     </style>
 </head>
 <body class="text-gray-800 bg-gray-100 h-screen flex flex-col overflow-hidden select-none">
@@ -185,6 +192,8 @@
             <i class="fas fa-info-circle text-amber-600 text-xs"></i>
             <span><strong>角度測定:</strong> 動画上で「頂点(関節) → 端点1 → 端点2」の順に3回タップしてください。</span>
         </div>
+
+        <p id="app-status" class="app-status px-1 shrink-0" role="status" aria-live="polite">動画を選択すると、再生・描画できます。</p>
 
         <!-- 動画プレイヤーエリア (フレックスサイズで画面内に収める) -->
         <div id="video-grid" class="flex-1 min-h-0 grid grid-cols-1 gap-2">
@@ -326,7 +335,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 saveBtn: document.querySelectorAll('.save-img-btn[data-slot="1"]')[0],
                 shapes: [], // 描画オブジェクト配列
                 anglePoints: [], // 角度指定時のクリック一時保存 [p1, p2, p3]
-                loaded: false
+                loaded: false,
+                objectUrl: null
             },
             2: {
                 video: document.getElementById('video-2'),
@@ -339,7 +349,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 saveBtn: document.querySelectorAll('.save-img-btn[data-slot="2"]')[0],
                 shapes: [],
                 anglePoints: [],
-                loaded: false
+                loaded: false,
+                objectUrl: null
             }
         }
     };
@@ -366,6 +377,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const undoBtn = document.getElementById('undo-btn');
     const clearAllBtn = document.getElementById('clear-all-btn');
     const angleHelp = document.getElementById('angle-help');
+    const appStatus = document.getElementById('app-status');
+
+    function setStatus(message, kind = 'info') {
+        appStatus.textContent = message;
+        appStatus.dataset.kind = kind;
+    }
 
     // ==========================================
     // 1. モード切り替え (1画面 / 2画面)
@@ -413,20 +430,41 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!file) return;
 
             const slot = state.slots[slotId];
-            const fileURL = URL.createObjectURL(file);
-            
-            slot.video.src = fileURL;
-            slot.fileName.textContent = file.name;
-            slot.placeholder.classList.add('hidden');
-            slot.loaded = true;
-            slot.saveBtn.disabled = false;
-            slot.progress.disabled = false;
 
+            // 以前の動画URLを解放し、同じスロットへの再選択でメモリが増え続けないようにする
+            if (slot.objectUrl) URL.revokeObjectURL(slot.objectUrl);
+            slot.video.pause();
+            slot.loaded = false;
+            slot.shapes = [];
+            slot.anglePoints = [];
+            slot.progress.value = 0;
+            slot.progress.disabled = true;
+            slot.saveBtn.disabled = true;
+            slot.placeholder.classList.remove('hidden');
+
+            slot.objectUrl = URL.createObjectURL(file);
+            slot.fileName.textContent = file.name;
             slot.video.onloadedmetadata = () => {
-                resizeCanvas(slotId);
+                slot.loaded = true;
+                slot.placeholder.classList.add('hidden');
                 slot.video.playbackRate = parseFloat(speedSelect.value);
+                slot.progress.disabled = false;
+                slot.saveBtn.disabled = false;
+                resizeCanvas(slotId);
                 updateMasterControls();
+                setStatus(`「${file.name}」を読み込みました。`, 'success');
             };
+            slot.video.onerror = () => {
+                slot.loaded = false;
+                slot.placeholder.classList.remove('hidden');
+                slot.progress.disabled = true;
+                slot.saveBtn.disabled = true;
+                updateMasterControls();
+                setStatus('この動画を読み込めませんでした。MP4形式（H.264/AAC）など、Safariで再生できる動画を選んでください。', 'error');
+            };
+            slot.video.src = slot.objectUrl;
+            slot.video.load();
+            setStatus(`「${file.name}」を読み込んでいます…`);
         });
     });
 
@@ -440,9 +478,54 @@ document.addEventListener('DOMContentLoaded', () => {
         const slot = state.slots[slotId];
         if (!slot.video) return;
         const rect = slot.video.getBoundingClientRect();
-        slot.canvas.width = rect.width;
-        slot.canvas.height = rect.height;
+
+        // 非表示の比較画面はサイズ0になることがあるため、描画データを壊さず後で再計算する
+        if (rect.width < 1 || rect.height < 1) return;
+
+        const oldWidth = slot.canvas.width;
+        const oldHeight = slot.canvas.height;
+        const scaleX = oldWidth > 0 ? rect.width / oldWidth : 1;
+        const scaleY = oldHeight > 0 ? rect.height / oldHeight : 1;
+
+        // 画面回転・サイズ変更後も、既存の描画位置を新しいキャンバスに追従させる
+        if (oldWidth > 0 && oldHeight > 0 &&
+            (Math.abs(rect.width - oldWidth) > 1 || Math.abs(rect.height - oldHeight) > 1)) {
+            slot.shapes.forEach(shape => scaleShapeCoordinates(shape, scaleX, scaleY));
+            slot.anglePoints.forEach(point => {
+                point.x *= scaleX;
+                point.y *= scaleY;
+            });
+        }
+
+        slot.canvas.width = Math.round(rect.width);
+        slot.canvas.height = Math.round(rect.height);
         redrawCanvas(slotId);
+    }
+
+    function scaleShapeCoordinates(shape, scaleX, scaleY) {
+        const scalePoint = point => {
+            point.x *= scaleX;
+            point.y *= scaleY;
+        };
+
+        if (shape.type === 'pen') {
+            shape.points.forEach(scalePoint);
+        } else if (shape.type === 'line' || shape.type === 'rect') {
+            shape.x1 *= scaleX;
+            shape.y1 *= scaleY;
+            shape.x2 *= scaleX;
+            shape.y2 *= scaleY;
+        } else if (shape.type === 'circle') {
+            shape.cx *= scaleX;
+            shape.cy *= scaleY;
+            shape.r *= (scaleX + scaleY) / 2;
+        } else if (shape.type === 'angle') {
+            scalePoint(shape.p1);
+            scalePoint(shape.p2);
+            scalePoint(shape.p3);
+        }
+
+        if (Number.isFinite(shape.width)) shape.width *= (scaleX + scaleY) / 2;
     }
 
     // 主コントロールボタンの活性状態更新
@@ -462,8 +545,18 @@ document.addEventListener('DOMContentLoaded', () => {
             slotsToControl.forEach(s => s.loaded && s.video.pause());
             setPlayIcon(false);
         } else {
-            slotsToControl.forEach(s => s.loaded && s.video.play());
-            setPlayIcon(true);
+            const playableSlots = slotsToControl.filter(s => s.loaded);
+            Promise.all(playableSlots.map(s => s.video.play().catch(error => {
+                console.warn('動画の再生に失敗しました:', error);
+                throw error;
+            }))).then(() => {
+                setPlayIcon(true);
+                setStatus('動画を再生しています。');
+            }).catch(() => {
+                playableSlots.forEach(s => s.video.pause());
+                setPlayIcon(false);
+                setStatus('再生できませんでした。動画形式やファイルの状態を確認してください。', 'error');
+            });
         }
     });
 
@@ -599,11 +692,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
-            const clientX = e.clientX || (e.touches && e.touches[0].clientX);
-            const clientY = e.clientY || (e.touches && e.touches[0].clientY);
             return {
-                x: clientX - rect.left,
-                y: clientY - rect.top
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
             };
         }
 
@@ -676,14 +767,21 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // マウス＆タッチイベント割り当て
-        canvas.addEventListener('mousedown', handleStart);
-        canvas.addEventListener('mousemove', handleMove);
-        window.addEventListener('mouseup', handleEnd);
-
-        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleStart(e); });
-        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); handleMove(e); });
-        canvas.addEventListener('touchend', handleEnd);
+        // Pointer Eventsでマウス・タッチ・Apple Pencilを共通処理する
+        canvas.addEventListener('pointerdown', (e) => {
+            if (!slot.loaded) return;
+            e.preventDefault();
+            try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+            handleStart(e);
+        });
+        canvas.addEventListener('pointermove', (e) => {
+            if (!slot.loaded) return;
+            if (e.pointerType !== 'mouse' || e.buttons !== 0) e.preventDefault();
+            handleMove(e);
+        });
+        canvas.addEventListener('pointerup', handleEnd);
+        canvas.addEventListener('pointercancel', handleEnd);
+        canvas.addEventListener('lostpointercapture', handleEnd);
     });
 
     // キャンバス再描画処理
@@ -765,10 +863,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const v2 = { x: p3.x - p1.x, y: p3.y - p1.y };
 
             // 角度(ラジアン)計算
-            const angleRad = Math.acos(
-                (v1.x * v2.x + v1.y * v2.y) / 
-                (Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y))
-            );
+            const len1 = Math.hypot(v1.x, v1.y);
+            const len2 = Math.hypot(v2.x, v2.y);
+            // 同じ位置を複数回タップした場合、NaN°を表示しない
+            if (len1 < 0.001 || len2 < 0.001) return;
+            const cosine = Math.max(-1, Math.min(1,
+                (v1.x * v2.x + v1.y * v2.y) / (len1 * len2)
+            ));
+            const angleRad = Math.acos(cosine);
             const angleDeg = ((angleRad * 180) / Math.PI).toFixed(1);
 
             // 2つのアームを描画
